@@ -16,6 +16,26 @@ class MarkdownEditorController extends ChangeNotifier {
   final List<MarkdownDocument> _redoStack = <MarkdownDocument>[];
   int _idSeed = 0;
   bool _liveEditing = false;
+  String? _pendingFocusBlockId;
+  int? _pendingFocusCursorOffset;
+
+  /// Returns the block ID that should be focused, if any.
+  String? get pendingFocusBlockId => _pendingFocusBlockId;
+
+  /// Returns the cursor offset for the pending focus.
+  int? get pendingFocusCursorOffset => _pendingFocusCursorOffset;
+
+  /// Clears the pending focus request.
+  void clearPendingFocus() {
+    _pendingFocusBlockId = null;
+    _pendingFocusCursorOffset = null;
+  }
+
+  /// Sets a pending focus request for the given block.
+  void setPendingFocus(String blockId, {int? cursorOffset}) {
+    _pendingFocusBlockId = blockId;
+    _pendingFocusCursorOffset = cursorOffset;
+  }
 
   MarkdownDocument get document => _document;
   List<MarkdownBlock> get blocks => _document.blocks;
@@ -433,6 +453,7 @@ class MarkdownEditorController extends ChangeNotifier {
   /// Splits a paragraph-like block at [cursorOffset], producing two blocks.
   /// The current block keeps the text before [cursorOffset]; a new paragraph
   /// block is inserted after it with the text after [cursorOffset].
+  /// The new block's ID is stored in [_pendingFocusBlockId] for post-build focus.
   void splitBlock(String blockId, int cursorOffset) {
     endLiveEditing();
     _recordHistory();
@@ -457,25 +478,64 @@ class MarkdownEditorController extends ChangeNotifier {
       case MarkdownBlockType.taskList:
         final item = block.items.firstOrNull;
         if (item == null) {
-          addBlock(MarkdownBlockType.paragraph, afterBlockId: blockId);
+          _insertEmptyParagraphAfter(blockId);
           return;
         }
         final content = item.content.text;
         beforeValue = item.content.slice(0, cursorOffset.clamp(0, content.length));
         afterValue = item.content.slice(cursorOffset.clamp(0, content.length), content.length);
       case _:
-        addBlock(MarkdownBlockType.paragraph, afterBlockId: blockId);
+        _insertEmptyParagraphAfter(blockId);
         return;
     }
 
-    _replaceBlock(blockId, (b) => _setParagraphLikeText(b, beforeValue));
-    addBlock(MarkdownBlockType.paragraph, afterBlockId: blockId);
-    final newBlock = _document.blocks
-        .where((b) => b.id != blockId)
-        .lastOrNull;
-    if (newBlock != null) {
-      _replaceBlock(newBlock.id, (b) => _setParagraphLikeText(b, afterValue));
-    }
+    // 更新当前 block 为 beforeValue
+    _replaceBlock(blockId, (b) => _setParagraphLikeText(b, beforeValue), recordHistory: false);
+    
+    // 创建新的空白段落 block（不使用模板）
+    final newBlockId = _nextId();
+    final newBlock = MarkdownBlock(
+      id: newBlockId,
+      type: MarkdownBlockType.paragraph,
+      text: afterValue,
+    );
+    
+    // 插入新 block
+    final blocks = _document.blocks.toList(growable: true);
+    final insertIndex = blocks.indexWhere((b) => b.id == blockId) + 1;
+    blocks.insert(insertIndex.clamp(0, blocks.length), newBlock);
+    _document = MarkdownDocument(
+      blocks: List<MarkdownBlock>.unmodifiable(blocks),
+    );
+    
+    // 设置待聚焦的 block ID
+    _pendingFocusBlockId = newBlockId;
+    _pendingFocusCursorOffset = 0;
+    
+    _syncMarkdown();
+    _redoStack.clear();
+    notifyListeners();
+  }
+
+  /// Inserts an empty paragraph block after [blockId].
+  void _insertEmptyParagraphAfter(String blockId) {
+    final newBlockId = _nextId();
+    final newBlock = MarkdownBlock(
+      id: newBlockId,
+      type: MarkdownBlockType.paragraph,
+      text: const StyledTextValue(text: ''),
+    );
+    
+    final blocks = _document.blocks.toList(growable: true);
+    final insertIndex = blocks.indexWhere((b) => b.id == blockId) + 1;
+    blocks.insert(insertIndex.clamp(0, blocks.length), newBlock);
+    _document = MarkdownDocument(
+      blocks: List<MarkdownBlock>.unmodifiable(blocks),
+    );
+    
+    _pendingFocusBlockId = newBlockId;
+    _pendingFocusCursorOffset = 0;
+    
     _syncMarkdown();
     _redoStack.clear();
     notifyListeners();

@@ -405,7 +405,7 @@ class _MarkdownEditorScreenState extends State<MarkdownEditorScreen> {
   }
 }
 
-class MarkdownWidget extends StatelessWidget {
+class MarkdownWidget extends StatefulWidget {
   const MarkdownWidget({
     super.key,
     required this.controller,
@@ -422,15 +422,44 @@ class MarkdownWidget extends StatelessWidget {
   final void Function(String blockId, {int? cursorOffset}) onRequestFocus;
 
   @override
+  State<MarkdownWidget> createState() => _MarkdownWidgetState();
+}
+
+class _MarkdownWidgetState extends State<MarkdownWidget> {
+  @override
+  void didUpdateWidget(covariant MarkdownWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _checkPendingFocus();
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _checkPendingFocus();
+  }
+
+  void _checkPendingFocus() {
+    final pendingId = widget.controller.pendingFocusBlockId;
+    if (pendingId != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final offset = widget.controller.pendingFocusCursorOffset;
+        widget.onRequestFocus(pendingId, cursorOffset: offset);
+        widget.controller.clearPendingFocus();
+      });
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     return ReorderableListView.builder(
       padding: const EdgeInsets.fromLTRB(24, 12, 24, 12),
       buildDefaultDragHandles: false,
-      itemCount: controller.blocks.length,
-      onReorder: controller.reorderBlock,
+      itemCount: widget.controller.blocks.length,
+      onReorder: widget.controller.reorderBlock,
       itemBuilder: (context, index) {
-        final block = controller.blocks[index];
-        final key = blockEditorKeys.putIfAbsent(
+        final block = widget.controller.blocks[index];
+        final key = widget.blockEditorKeys.putIfAbsent(
           block.id,
           () => GlobalKey<MarkdownBlockEditorState>(),
         );
@@ -441,10 +470,10 @@ class MarkdownWidget extends StatelessWidget {
             key: key,
             index: index,
             block: block,
-            controller: controller,
-            onActivateEditor: onActivateEditor,
-            onTapLink: onTapLink,
-            onRequestFocus: onRequestFocus,
+            controller: widget.controller,
+            onActivateEditor: widget.onActivateEditor,
+            onTapLink: widget.onTapLink,
+            onRequestFocus: widget.onRequestFocus,
           ),
         );
       },
@@ -646,8 +675,8 @@ class _MarkdownBlockEditor extends StatefulWidget {
 }
 
 class MarkdownBlockEditorState extends State<_MarkdownBlockEditor> {
-  bool _hovering = false;
   bool _focused = false;
+  String? _rawText; // 存储原始 Markdown 文本（包含标记）
   final GlobalKey<_RichMarkdownFieldState> _richFieldKey =
       GlobalKey<_RichMarkdownFieldState>();
 
@@ -657,98 +686,10 @@ class MarkdownBlockEditorState extends State<_MarkdownBlockEditor> {
 
   @override
   Widget build(BuildContext context) {
-    return MouseRegion(
-      onEnter: (_) => setState(() => _hovering = true),
-      onExit: (_) => setState(() => _hovering = false),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _buildBlockToolbar(context),
-          const SizedBox(height: 2),
-          _buildEditor(context),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildBlockToolbar(BuildContext context) {
-    final showActions = _hovering || _focused;
-    return Row(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        ReorderableDragStartListener(
-          index: widget.index,
-          child: AnimatedOpacity(
-            opacity: showActions ? 0.6 : 0,
-            duration: const Duration(milliseconds: 150),
-            child: const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 2, vertical: 2),
-              child: Icon(Icons.drag_indicator_rounded, size: 16),
-            ),
-          ),
-        ),
-        AnimatedOpacity(
-          opacity: showActions ? 1 : 0,
-          duration: const Duration(milliseconds: 150),
-          child: PopupMenuButton<MarkdownBlockType>(
-            tooltip: '转换块类型',
-            onSelected: (type) =>
-                widget.controller.convertBlock(widget.block.id, type),
-            itemBuilder: (context) => MarkdownBlockType.values
-                .map(
-                  (type) => PopupMenuItem<MarkdownBlockType>(
-                    value: type,
-                    child: Text(type.label),
-                  ),
-                )
-                .toList(growable: false),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(999),
-                border: Border.all(color: const Color(0xFFE5DCCF)),
-              ),
-              child: Text(
-                widget.block.type.label,
-                style: Theme.of(
-                  context,
-                ).textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w700),
-              ),
-            ),
-          ),
-        ),
-        const Spacer(),
-        AnimatedOpacity(
-          opacity: showActions ? 1 : 0,
-          duration: const Duration(milliseconds: 150),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              IconButton(
-                tooltip: '填充示例',
-                onPressed: () =>
-                    widget.controller.applyBlockExample(widget.block.id),
-                icon: const Icon(Icons.auto_fix_high_rounded, size: 16),
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-              ),
-              IconButton(
-                tooltip: '复制块',
-                onPressed: () =>
-                    widget.controller.duplicateBlock(widget.block.id),
-                icon: const Icon(Icons.copy_rounded, size: 16),
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-              ),
-              IconButton(
-                tooltip: '删除块',
-                onPressed: () => widget.controller.deleteBlock(widget.block.id),
-                icon: const Icon(Icons.delete_outline_rounded, size: 16),
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-              ),
-            ],
-          ),
-        ),
+        _buildEditor(context),
       ],
     );
   }
@@ -760,29 +701,123 @@ class MarkdownBlockEditorState extends State<_MarkdownBlockEditor> {
 
   void _onEditingEnded() {
     widget.controller.endLiveEditing();
+    // 获取当前文本
+    final currentText = _rawText ?? widget.block.text.text;
+    
+    // 先检测格式标记
+    final trigger = _detectBlockTrigger(currentText);
+    String pureText = currentText;
+    
+    if (trigger != null) {
+      // 如果检测到格式标记，使用去掉标记后的文本
+      pureText = trigger.strippedText;
+      // 应用块类型转换
+      _handleBlockTrigger(trigger);
+    } else {
+      // 对于 heading/quote 等已有类型的块，去掉前缀
+      final prefix = _getBlockPrefix();
+      if (prefix.isNotEmpty && currentText.startsWith(prefix)) {
+        pureText = currentText.substring(prefix.length);
+      }
+    }
+    
+    // 保存纯文本
+    widget.controller.updateParagraphLikeBlock(
+      widget.block.id,
+      StyledTextValue(text: pureText),
+      recordHistory: false,
+    );
+    
+    _rawText = null;
     setState(() => _focused = false);
   }
 
+  /// 获取编辑时显示的文本（带格式标记前缀）
+  StyledTextValue _getEditingValue() {
+    final text = widget.block.text.text;
+    final prefix = _getBlockPrefix();
+    if (prefix.isEmpty || text.startsWith(prefix)) {
+      return widget.block.text;
+    }
+    return StyledTextValue(
+      text: prefix + text,
+      marks: _shiftMarks(widget.block.text.marks, prefix.length),
+    );
+  }
+
+  /// 获取当前块类型的 Markdown 前缀
+  String _getBlockPrefix() {
+    switch (widget.block.type) {
+      case MarkdownBlockType.heading:
+        return '#' * widget.block.level + ' ';
+      case MarkdownBlockType.quote:
+        return '> ';
+      default:
+        return '';
+    }
+  }
+
+  /// 将 marks 的偏移量向后移动指定长度
+  List<InlineMark> _shiftMarks(List<InlineMark> marks, int shift) {
+    return marks.map((mark) => InlineMark(
+      start: mark.start + shift,
+      end: mark.end + shift,
+      type: mark.type,
+      data: mark.data,
+    )).toList(growable: false);
+  }
+
+  /// 去掉文本中的格式前缀，返回纯文本值
+  StyledTextValue _stripPrefix(String text) {
+    final prefix = _getBlockPrefix();
+    if (prefix.isEmpty || !text.startsWith(prefix)) {
+      return StyledTextValue(text: text);
+    }
+    return StyledTextValue(
+      text: text.substring(prefix.length),
+      marks: _shiftMarks(
+        widget.block.text.marks.where((m) => m.start >= prefix.length).toList(),
+        -prefix.length,
+      ),
+    );
+  }
+
   Widget _buildEditor(BuildContext context) {
+    // 编辑时显示带前缀的文本，预览时显示纯文本
+    final displayValue = _focused ? _getEditingValue() : widget.block.text;
+
     switch (widget.block.type) {
       case MarkdownBlockType.heading:
         return _RichMarkdownField(
           key: _richFieldKey,
-          value: widget.block.text,
+          value: displayValue,
           style: _blockStyle(context, widget.block),
           hintText: '输入标题内容，或在段落中使用 # 创建标题',
           onActivateEditor: widget.onActivateEditor,
           onEditingStarted: _onEditingStarted,
           onEditingEnded: _onEditingEnded,
-          onChanged: (value) => widget.controller.updateParagraphLikeBlock(
-            widget.block.id,
-            value,
-            recordHistory: false,
-          ),
+          onChanged: (value) {
+            // 编辑时保存原始文本（含前缀）
+            _rawText = value.text;
+            widget.controller.updateParagraphLikeBlock(
+              widget.block.id,
+              value,
+              recordHistory: false,
+            );
+          },
           onSlashCommandSelected: _handleSlashCommand,
-          onBlockTriggerDetected: _handleBlockTrigger,
-          onSplitBlock: (offset) =>
-              widget.controller.splitBlock(widget.block.id, offset),
+          onBlockTriggerDetected: null, // 编辑时不再自动触发块类型转换
+          onSplitBlock: (offset) {
+            // 分割时去掉前缀
+            final currentText = _rawText ?? widget.block.text.text;
+            final pureValue = _stripPrefix(currentText);
+            widget.controller.updateParagraphLikeBlock(
+              widget.block.id,
+              pureValue,
+              recordHistory: false,
+            );
+            widget.controller.splitBlock(widget.block.id, offset);
+          },
           onBackspaceOnEmpty: _deleteCurrentBlockIfPossible,
           onMergeWithPrevious: _mergeWithPreviousBlock,
           onFocusPreviousBlock: _focusPreviousBlock,
@@ -798,13 +833,16 @@ class MarkdownBlockEditorState extends State<_MarkdownBlockEditor> {
           onActivateEditor: widget.onActivateEditor,
           onEditingStarted: _onEditingStarted,
           onEditingEnded: _onEditingEnded,
-          onChanged: (value) => widget.controller.updateParagraphLikeBlock(
-            widget.block.id,
-            value,
-            recordHistory: false,
-          ),
+          onChanged: (value) {
+            _rawText = value.text;
+            widget.controller.updateParagraphLikeBlock(
+              widget.block.id,
+              value,
+              recordHistory: false,
+            );
+          },
           onSlashCommandSelected: _handleSlashCommand,
-          onBlockTriggerDetected: _handleBlockTrigger,
+          onBlockTriggerDetected: null, // 段落编辑时也禁用自动触发，失去焦点后统一处理
           onSplitBlock: (offset) =>
               widget.controller.splitBlock(widget.block.id, offset),
           onBackspaceOnEmpty: _deleteCurrentBlockIfPossible,
@@ -824,21 +862,32 @@ class MarkdownBlockEditorState extends State<_MarkdownBlockEditor> {
           ),
           child: _RichMarkdownField(
             key: _richFieldKey,
-            value: widget.block.text,
+            value: displayValue,
             style: _blockStyle(context, widget.block),
             hintText: '输入引用内容',
             onActivateEditor: widget.onActivateEditor,
             onEditingStarted: _onEditingStarted,
             onEditingEnded: _onEditingEnded,
-            onChanged: (value) => widget.controller.updateParagraphLikeBlock(
-              widget.block.id,
-              value,
-              recordHistory: false,
-            ),
+            onChanged: (value) {
+              _rawText = value.text;
+              widget.controller.updateParagraphLikeBlock(
+                widget.block.id,
+                value,
+                recordHistory: false,
+              );
+            },
             onSlashCommandSelected: _handleSlashCommand,
-            onBlockTriggerDetected: _handleBlockTrigger,
-            onSplitBlock: (offset) =>
-                widget.controller.splitBlock(widget.block.id, offset),
+            onBlockTriggerDetected: null,
+            onSplitBlock: (offset) {
+              final currentText = _rawText ?? widget.block.text.text;
+              final pureValue = _stripPrefix(currentText);
+              widget.controller.updateParagraphLikeBlock(
+                widget.block.id,
+                pureValue,
+                recordHistory: false,
+              );
+              widget.controller.splitBlock(widget.block.id, offset);
+            },
             onBackspaceOnEmpty: _deleteCurrentBlockIfPossible,
             onMergeWithPrevious: _mergeWithPreviousBlock,
             onFocusPreviousBlock: _focusPreviousBlock,
@@ -979,13 +1028,21 @@ class MarkdownBlockEditorState extends State<_MarkdownBlockEditor> {
           ),
         );
       case MarkdownBlockType.table:
+        final columnCount = widget.block.rows.isNotEmpty
+            ? widget.block.rows.first.length
+            : 0;
         return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: Table(
-                defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+                defaultVerticalAlignment: TableCellVerticalAlignment.top,
                 border: TableBorder.all(color: const Color(0xFFD8CCBC)),
+                columnWidths: {
+                  for (var i = 0; i < columnCount; i++)
+                    i: const FixedColumnWidth(180),
+                },
                 children: [
                   for (var row = 0; row < widget.block.rows.length; row++)
                     TableRow(
@@ -1000,35 +1057,35 @@ class MarkdownBlockEditorState extends State<_MarkdownBlockEditor> {
                           column < widget.block.rows[row].length;
                           column++
                         )
-                          Padding(
+                          Container(
+                            constraints: const BoxConstraints(
+                              minHeight: 48,
+                            ),
                             padding: const EdgeInsets.all(8),
-                            child: SizedBox(
-                              width: 180,
-                              child: _RichMarkdownField(
-                                value: widget.block.rows[row][column],
-                                style:
-                                    Theme.of(
-                                      context,
-                                    ).textTheme.bodyMedium?.copyWith(
-                                      fontWeight: row == 0
-                                          ? FontWeight.w800
-                                          : FontWeight.w500,
-                                      height: 1.55,
-                                    ) ??
-                                    const TextStyle(fontSize: 14),
-                                hintText: row == 0 ? '表头' : '单元格',
-                                onActivateEditor: widget.onActivateEditor,
-                                onEditingStarted: _onEditingStarted,
-                                onEditingEnded: _onEditingEnded,
-                                onChanged: (value) =>
-                                    widget.controller.updateTableCell(
-                                      widget.block.id,
-                                      row,
-                                      column,
-                                      value,
-                                      recordHistory: false,
-                                    ),
-                              ),
+                            child: _RichMarkdownField(
+                              value: widget.block.rows[row][column],
+                              style:
+                                  Theme.of(
+                                    context,
+                                  ).textTheme.bodyMedium?.copyWith(
+                                    fontWeight: row == 0
+                                        ? FontWeight.w800
+                                        : FontWeight.w500,
+                                    height: 1.55,
+                                  ) ??
+                                  const TextStyle(fontSize: 14),
+                              hintText: row == 0 ? '表头' : '单元格',
+                              onActivateEditor: widget.onActivateEditor,
+                              onEditingStarted: _onEditingStarted,
+                              onEditingEnded: _onEditingEnded,
+                              onChanged: (value) =>
+                                  widget.controller.updateTableCell(
+                                    widget.block.id,
+                                    row,
+                                    column,
+                                    value,
+                                    recordHistory: false,
+                                  ),
                             ),
                           ),
                       ],
@@ -1818,10 +1875,10 @@ class _PlainMultilineFieldState extends State<_PlainMultilineField> {
     final selection = _controller.selection;
     if (!_focusNode.hasFocus ||
         !selection.isValid ||
-        selection.isCollapsed ||
-        (previousSelection?.isCollapsed == false)) {
+        selection.isCollapsed) {
       return;
     }
+    // 当有选中文本时显示工具栏（双击或拖动选中）
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_focusNode.hasFocus) {
         return;
@@ -2030,6 +2087,11 @@ class _RichMarkdownFieldState extends State<_RichMarkdownField> {
     if (!textChanged) {
       _updateSlashOverlay();
       _maybeShowSelectionToolbar(previousSelection);
+      return;
+    }
+
+    // 中文输入法合成期间跳过处理，避免打断输入
+    if (_controller.value.composing.isValid) {
       return;
     }
 
@@ -2270,8 +2332,12 @@ class _RichMarkdownFieldState extends State<_RichMarkdownField> {
   void requestFocus({int? cursorOffset}) {
     _focusNode.requestFocus();
     if (cursorOffset != null) {
-      Future.microtask(() {
-        if (mounted && _focusNode.hasFocus) {
+      // 延迟到下一帧，确保 didUpdateWidget 已经完成且焦点已获取
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        // 确保焦点在下一帧时设置
+        _focusNode.requestFocus();
+        if (_focusNode.hasFocus) {
           _controller.selection = TextSelection.collapsed(
             offset: cursorOffset.clamp(0, _controller.text.length),
           );
@@ -2458,15 +2524,17 @@ class _RichMarkdownController extends TextEditingController {
   void syncValue(StyledTextValue next, {TextSelection? selection}) {
     richValue = next.clone();
     if (text != next.text) {
+      // 保留 composing 范围以支持中文输入法
       value = TextEditingValue(
         text: next.text,
         selection:
             selection ?? TextSelection.collapsed(offset: next.text.length),
+        composing: value.composing,
       );
       return;
     }
     if (selection != null) {
-      value = value.copyWith(selection: selection, composing: TextRange.empty);
+      value = value.copyWith(selection: selection);
     } else {
       notifyListeners();
     }
@@ -2479,26 +2547,38 @@ class _RichMarkdownController extends TextEditingController {
     required bool withComposing,
   }) {
     final spans = <InlineSpan>[];
-    final boundaries = <int>{0, richValue.text.length};
+    final textLength = richValue.text.length;
+    final boundaries = <int>{0, textLength};
+    
     for (final mark in richValue.marks) {
       boundaries
-        ..add(mark.start)
-        ..add(mark.end);
+        ..add(mark.start.clamp(0, textLength))
+        ..add(mark.end.clamp(0, textLength));
     }
+    
+    // 添加输入法合成范围的边界（限制在文本长度内）
+    if (withComposing && value.composing.isValid) {
+      boundaries
+        ..add(value.composing.start.clamp(0, textLength))
+        ..add(value.composing.end.clamp(0, textLength));
+    }
+    
     final sorted = boundaries.toList()..sort();
 
     for (var i = 0; i < sorted.length - 1; i++) {
       final start = sorted[i];
       final end = sorted[i + 1];
-      if (end <= start) {
+      if (end <= start || start >= textLength) {
         continue;
       }
 
-      final segment = richValue.text.substring(start, end);
+      final segment = richValue.text.substring(start, end.clamp(start, textLength));
       final activeMarks = richValue.marks
           .where((mark) => mark.start <= start && mark.end >= end)
           .toList(growable: false);
       var segmentStyle = baseStyle;
+      
+      // 应用 marks 样式
       for (final mark in activeMarks) {
         switch (mark.type) {
           case InlineMarkType.bold:
@@ -2527,6 +2607,18 @@ class _RichMarkdownController extends TextEditingController {
             );
         }
       }
+      
+      // 应用输入法合成范围的下划线样式
+      if (withComposing &&
+          value.composing.isValid &&
+          start >= value.composing.start &&
+          end <= value.composing.end) {
+        segmentStyle = segmentStyle.copyWith(
+          decoration: TextDecoration.underline,
+          decorationColor: const Color(0xFF0F766E),
+        );
+      }
+      
       spans.add(TextSpan(text: segment, style: segmentStyle));
     }
 
